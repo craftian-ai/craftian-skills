@@ -1,0 +1,12 @@
+{
+  "name": "craftian",
+  "description": "Deploy an app to Craftian. Covers scratch projects that need no account and owned apps that deploy over git.",
+  "version": "1.0.0",
+  "homepage": "https://craftian.ai",
+  "repository": "https://github.com/craftian-ai/craftian-skills",
+  "license": "MIT",
+  "author": {
+    "name": "FOR IO LABS, INC.",
+    "url": "https://craftian.ai"
+  }
+}

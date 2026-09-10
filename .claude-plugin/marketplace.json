@@ -1,0 +1,23 @@
+{
+  "name": "craftian-skills",
+  "owner": {
+    "name": "FOR IO LABS, INC.",
+    "url": "https://craftian.ai"
+  },
+  "metadata": {
+    "description": "The Craftian skill: deploy an app to a cloud that gives it a database, sign-in, permissions, storage, scheduled jobs and a live URL.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "craftian",
+      "source": ".",
+      "description": "Deploy an app to Craftian. Covers scratch projects that need no account and owned apps that deploy over git.",
+      "homepage": "https://craftian.ai",
+      "repository": "https://github.com/craftian-ai/craftian-skills",
+      "license": "MIT",
+      "category": "deployment",
+      "keywords": ["deploy", "hosting", "cloud", "git", "craftian"]
+    }
+  ]
+}
