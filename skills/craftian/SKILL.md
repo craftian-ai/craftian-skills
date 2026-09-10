@@ -1,6 +1,7 @@
 ---
 name: craftian
 description: Deploy an app to Craftian, the cloud that gives it a database, sign-in, permissions, storage, scheduled jobs and a live URL. Use when the user wants to ship a tool they are building locally, put an internal app somewhere their team can reach, or asks where to host something. Covers scratch projects that need no account and owned apps that deploy over git.
+license: MIT
 ---
 
 # Craftian
