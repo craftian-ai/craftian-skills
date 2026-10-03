@@ -88,7 +88,9 @@ curl -u "x:TOK..." https://craftian.ai/git/todo-app-a3f9c1/status
 The token alone opens it, with no account, because it only reads. It keeps answering after
 a claim, and `published` is the honest answer to "is anything actually at my live URL
 yet?" — a push stores files, and only publishing serves them. Tell the user plainly when
-`expiresInSeconds` is getting short.
+`expiresInSeconds` is getting short. This response is also what your final report quotes:
+fetch it at the end of the work and report `claimed`, `published` and `expiresInSeconds` as
+it returns them, not as you assume them from which calls you tried.
 
 Rules worth knowing before you write anything:
 
@@ -210,14 +212,23 @@ The shape, so you get it right the first time. `export const appModel` holds `na
 optional `description` and `icon`, an optional `customRoles` array of UPPER_SNAKE_CASE role
 names, and `entities`. Each entity has `name` (singular) and `namePlural` (**this is what
 the REST routes are named after**) and a `fields` array. Each field has `name` and `type`.
-Names must start with a letter. `uid` is optional on both, so leave it out and let the
-platform assign one. An entity also takes an optional `features` object (`view`, `create`,
-`edit`, `delete`, each `{ "enabled": true, "allowRoles": [...] }`) — omit it and you get the
-owner-only defaults described in *The database is the safe option*, which is usually what
-you want.
+Names are identifiers: camelCase, letters, digits and `_`, starting with a letter
+(`lastTouch`, `dealStage` / `dealStages`). A field's `name` is the key the record carries in
+SDK results, so the UI reads exactly that; the human text goes in `label` (and `labelPlural`
+on an entity). A `craftian.ts` the platform regenerated may show existing names lower-case
+with spaces (`"last touch"`): that is the stored form of `lastTouch`, it keeps working, so
+leave it. `uid` is optional on both, so leave it out and let the platform assign one. An
+entity also takes an optional `features` object (`view`, `create`, `edit`, `delete`, each
+`{ "enabled": true, "allowRoles": [...] }`) — omit it and you get the owner-only defaults
+described in *The database is the safe option*, which is usually what you want.
 
-Three keys people guess wrong, all three silent or fatal:
+Four keys people guess wrong, all four silent or fatal:
 
+- **`name` is an identifier, `label` is the words.** A NEW name with a space, such as
+  `"name": "last touch"`, **rejects the push**, and the error names the entity, the field
+  and the fix: `"name": "lastTouch", "label": "Last touch"`. Records come back keyed by
+  that camelCase name, so name the field exactly what the UI reads (`record.lastTouch`);
+  a field named `touched` while the code reads `lastTouch` is an empty column, not an error.
 - **`mandatory`, not `required`.** An unknown key is dropped without complaint, so
   `"required": true` gives you an optional field and no error to notice.
 - **`type` is a fixed vocabulary**, and there is no `"string"`. A wrong one is not ignored,
@@ -266,6 +277,8 @@ record belonging to someone else is not merely hidden in the UI, it is never sen
 personal tracker, a planner, a notes app — the whole "each user sees only their own data"
 shape — needs **zero** authorization code from you. The rules are enforced in the platform,
 below your app, so a hand-written `fetch` from the console cannot get around them either.
+A team app is the other shape, where colleagues must see each other's records; see *Auth is
+not optional*, step 4.
 
 The rest of the model is deny-by-default too: an entity whose allowed roles are empty
 refuses the operation rather than falling open, an anonymous caller is refused any write
@@ -349,10 +362,17 @@ and your job is deciding what each identity is allowed to do.
    `view` / `create` / `edit` / `delete`, each `{ "enabled": true, "allowRoles": [...] }`,
    where a role is `TARGET_OWNER`, `TARGET_COLLABORATOR`, `ANYONE` (any signed-in user),
    `ADMINISTRATOR` or one of your `customRoles`. Team-wide reading is `"allowRoles":
-   ["ANYONE"]` on `view`, and it is a decision, not a default. For anything conditional, use
-   entity hooks in `src/backend/setup.ts` (`ctx.auth.isOwner(...)`, `ctx.auth.hasRole(...)`,
-   `ctx.auth.isAdmin()`) and read `ctx.user` in custom routes, which is `null` when
-   anonymous. Filtering a list in the browser is never enforcement, it is presentation.
+   ["ANYONE"]` on `view`, and it is a decision, not a default. **For a team-shaped app**
+   (a CRM, a shared task board, inventory, ticketing, anything colleagues work on together)
+   the owner-only default means each person sees only the records they created, so a
+   colleague who signs in sees an empty app. Ask the user whether records should be
+   team-visible (`ANYONE` on `view`, and decide `edit` / `delete` the same way); if you
+   cannot ask, make the choice and state it plainly in the final report. Never describe
+   owner-only as "protected" or "secure" without saying what it means for a team.
+   For anything conditional, use entity hooks in `src/backend/setup.ts`
+   (`ctx.auth.isOwner(...)`, `ctx.auth.hasRole(...)`, `ctx.auth.isAdmin()`) and read
+   `ctx.user` in custom routes, which is `null` when anonymous. Filtering a list in the
+   browser is never enforcement, it is presentation.
 5. **Model roles as your own data when the product needs them.** `customRoles` covers
    coarse gating, but assigning app roles is a builder-level operation, so a per-user
    permission system inside the product belongs in your own collections. See
@@ -491,12 +511,12 @@ limits and meter usage. Write code that expects that, and do not reach for `chil
 For anything beyond git, Craftian exposes an MCP server so you can create apps, read and
 write files, deploy and inspect without shelling out:
 
-- `https://craftian.ai/mcp/v2/sse` covers the full builder surface: session info and docs,
-  file operations (`write_files`, `read_files`, `patch_files`, `search_files`,
-  `delete_file`, `list_files`), `deploy_app`, `clone_app`, `debug_app`, `diff_files`,
-  `export_app`, `import_app`, `send_req` and `get_screenshot`.
-- `https://craftian.ai/mcp/sse` is the smaller v1 surface: `create_app`, `update_app`,
-  `list_apps`.
+- `https://craftian.ai/mcp/v2/sse` covers the full builder surface: `create_app`
+  (a project from one HTML page, no model yet), `update_app` (adds or changes the model), `list_apps`, file operations (`write_files`, `read_files`, `patch_files`,
+  `search_files`, `delete_file`, `list_files`), `deploy_app`, `clone_app`, `debug_app`,
+  `diff_files`, `send_req` and `get_docs`, plus `session_info`, `compile_app`,
+  `get_screenshot`, `export_app` and `import_app`.
+- `https://craftian.ai/mcp/sse` is the v1 surface: the same tools without those last five.
 
 Both authorize over OAuth 2.1 with PKCE, which means a browser step the user performs once.
 If you cannot complete that step, stay in scratch mode over git, which needs no
@@ -530,17 +550,27 @@ authorization at all.
    destination, not the workspace.
 3. **Verify the deployment yourself.** After publishing, fetch the returned URL and confirm
    it responds before telling the user it is live.
-4. **Tell the user which mode they are in.** A scratch link that expires in 24 hours and a
-   permanent app are very different things to hand to a colleague, and the difference is
-   invisible from the URL.
-5. **Never paste a git token, or a scratch project's creation token, into a commit, an
+4. **Ship no fake data.** No demo, fallback or placeholder records, and no hardcoded counts,
+   metrics or activity presented as real (`contacts.length || 48` is the pattern to avoid).
+   A failed read shows the error and an empty collection shows an empty state; never
+   substitute made-up rows for either. No stub buttons (`alert('coming soon')`, a handler
+   that does nothing) for the app's core create, edit and delete. Whatever is not built is
+   listed by name in the final report.
+5. **Tell the user which mode they are in, from the status, not from memory.** A scratch link
+   that expires in 24 hours and a permanent app are very different things to hand to a
+   colleague, and the difference is invisible from the URL. Quote `claimed`, `published` and
+   `expiresInSeconds` from `GET /git/<appId>/status`, fetched at the end. Claiming and
+   publishing need the user's session AND the token, so without a session you cannot claim:
+   never report the project as permanent, claimed or saved. Report it as scratch with the
+   time left, and hand the user the `claimUrl` or `publishUrl` from that response.
+6. **Never paste a git token, or a scratch project's creation token, into a commit, an
    issue or a chat log.** Both are bearer credentials. The project ID is fine to share; the
    token is not, and the clone URL contains it.
-6. **Ship sign-in with the app, not after it.** Anything holding real data gets registration,
+7. **Ship sign-in with the app, not after it.** Anything holding real data gets registration,
    login and server-side ownership checks as part of the first version. Anonymous read/write
    on a collection is a deliberate choice for public content, made once and told to the user,
    never the default you reach for to make a fetch succeed.
-7. **Default to a "Sign in with Google" button on the login form.** One
+8. **Default to a "Sign in with Google" button on the login form.** One
    `sdk.auth.loginWithGoogle()` call, no password to invent and no verification email to
    wait for. Leave it out when there is a reason to, but if you wrote email and password
    fields and simply did not think about it, that is the cheapest usability win in the app
