@@ -22,7 +22,7 @@ from a terminal.
 | Credential | a secret token from the create call | a per-app git token |
 | Lives for | 24 h from creation, fixed | until deleted |
 | Database + sign-in | yes, both | yes, both |
-| Builds `src/` | no — static files only | yes: custom routes, hooks, scheduled tasks, React |
+| Builds `src/` | the backend only (`src/backend/`: custom routes, hooks, scheduled tasks), on publish. No React build | yes, all of it: backend and React |
 | Good for | a prototype, a demo, a link to send today | anything the team will keep using |
 
 Start in scratch mode when the user has no account yet or just wants to see it work. Move
@@ -65,9 +65,10 @@ git add -A && git commit -m "init" && git push origin master
 #    the token: publishing claims the project into theirs and serves THAT SAME
 #    project, at the liveUrl step 1 already named. Without a session it returns
 #    401 with a login URL; without the token, 404.
-curl -X POST -u "x:TOK..." -b "SESSION_ID=<session>" \
+curl -X POST -u "x:TOK..." -b "__Host-SESSION_ID=<session>" \
      https://craftian.ai/git/todo-app-a3f9c1/publish
-# → {"appId":"todo-app-a3f9c1","url":"https://todo-app-a3f9c1.craftian.app","status":"published", ...}
+# → {"appId":"todo-app-a3f9c1","url":"https://todo-app-a3f9c1.craftian.app","status":"published",
+#    "backend":{"hasSource":true,"deployed":true}, ...}
 ```
 
 Steps 1 to 4 need no account at all. Step 5 does, and so does claiming without publishing
@@ -82,13 +83,37 @@ want to know where things stand, read the status instead of guessing by trying d
 ```bash
 curl -u "x:TOK..." https://craftian.ai/git/todo-app-a3f9c1/status
 # → {"claimed":false,"published":false,"expiresInSeconds":81234,
+#    "backend":{"hasSource":true,"deployed":false,"message":"..."},
 #    "gitRemote":"...","liveUrl":"...","claimUrl":"...","publishUrl":"..."}
 ```
 
 The token alone opens it, with no account, because it only reads. It keeps answering after
 a claim, and `published` is the honest answer to "is anything actually at my live URL
 yet?" — a push stores files, and only publishing serves them. Tell the user plainly when
-`expiresInSeconds` is getting short. This response is also what your final report quotes:
+`expiresInSeconds` is getting short.
+
+`backend` is the answer to "the page is up, so why do my routes 404?". `hasSource` says the
+repo holds backend code you wrote under `src/backend/` (the untouched starter `setup.ts`
+does not count). `deployed` says the current deployment contains a backend. When
+`hasSource` is true and `deployed` is false, your routes, hooks and scheduled tasks do not
+exist at the live URL yet, and `message` names the door that deploys them: publish again.
+`deployed` means a backend is live, not that it matches your latest push, so publish again
+after pushing backend changes. A `null` here means the state could not be read just now;
+the rest of the answer is still good.
+
+`missingFiles` and `servedCheck` are the answer to "the page is up, so why are its styles
+and scripts 404?". After a publish uploads your files, the platform asks its file host for
+each one. `missingFiles` lists the files that were uploaded and that the host says do not
+exist. Read `servedCheck.state` with it: `ok` means every file is there, `missing` means
+the listed ones are not, and `incomplete` means the check could not finish, which tells
+you nothing either way (an empty `missingFiles` is only good news when the state is `ok`).
+`none` and `off` mean nothing was checked. This is not `skippedFiles`: a skipped file was
+never uploaded because of its file type, and renaming it fixes that. A missing file is a
+platform problem, not yours: publish again once, and if it is still missing, tell the user
+and quote `servedCheck.message`. The publish response carries the same two fields. Here
+they describe the last publish, and both are `null` when there is nothing recorded.
+
+This response is also what your final report quotes:
 fetch it at the end of the work and report `claimed`, `published` and `expiresInSeconds` as
 it returns them, not as you assume them from which calls you tried.
 
@@ -104,19 +129,46 @@ Rules worth knowing before you write anything:
 - **The project id is not a secret and never changes.** It is minted from the name you give
   (`Todo App` → `todo-app-a3f9c1`), and it stays that id when the project is claimed. That
   is why nothing has to be repointed later.
-- **Publish is static only.** HTML, CSS, JS and images are served as they are. There is no
-  build step on the server, so compile or bundle locally and commit the output.
+- **Publish serves `website/` as it is, and builds your backend.** HTML, CSS, JS and images
+  under `website/` are served exactly as committed: there is no bundle step for the page, so
+  compile or bundle any frontend locally and commit the output. Backend code you wrote under
+  `src/backend/` IS compiled and deployed by publish, so its custom routes, entity hooks and
+  scheduled tasks go live with the page. The starter `src/backend/setup.ts` every new repo
+  contains is not deployed until you change it. The publish response says what happened in
+  `backend` (`hasSource`, `deployed`). A backend file that does not compile fails the publish
+  with a 400 naming the file, before anything is claimed or deployed.
+- **Link files with relative paths, and call the API with the page's origin.** The platform
+  is moving apps to being served entirely from their own address, each app on a later
+  publish. Once an app has moved, relative and root-relative links (`styles.css`,
+  `/styles.css`, `/about`) and `fetch('/api/...')` all just work. Until then the served main
+  page carries a `<base>` tag pointing at the asset host, which breaks root-relative URLs. So
+  write relative paths for your files and `${window.location.origin}/api/...` for your own
+  API calls: both work either way. The SDK already does this.
+- **Clean URLs and a single-page fallback, once an app has moved.** `website/about.html` is
+  reached at `/about` (`/about.html` redirects there) and `website/docs/index.html` at
+  `/docs/` (link it with the trailing slash: at `/docs` the page's own relative links and
+  fetches resolve from the site root). An unknown address without a file extension serves
+  `website/404.html` with a 404 if you have one, otherwise `website/index.html`, so
+  client-side routing works. An unknown address with an extension is a plain 404.
+- **Some addresses are the platform's on every app**: everything under `/api/`, `/mcp/` and
+  `/.well-known/oauth-*` (the OAuth discovery documents), and `/login`, `/login2`, `/register`,
+  `/account`, `/change-password` and `/forgot-password`. A file at one of them is never
+  served, and the publish response lists it in `warnings`.
+- **Publishing runs that backend on the account that claims the project.** Tell the user so
+  before they publish: its routes and scheduled tasks run, and what they use is billed to
+  that account. The landing page says the same above its buttons.
 - **A scratch app gets a real database AND real sign-in.** Push a `craftian.ts` defining
   entities and publish deploys it, so the collections and their CRUD API exist here too. And
-  sign-in is the platform's, served on every app host, so the published page can register and
-  log people in exactly as an owned app does — the visitor gets a Craftian account and their
-  records are owner-scoped by the defaults in *The database is the safe option* below. A
-  scratch app therefore does **not** need anonymous access unless you choose to skip the
-  login screen, and it is not a reason to fall back to `localStorage` for safety.
-  What scratch does not do is BUILD anything, so the `src/` backend and frontend are not
-  compiled: no custom routes, no entity hooks, no scheduled tasks, no React bundle. The
-  served page is the static one you commit, which can talk to the database and to auth
-  through the SDK. That, not security, is the reason to move to an owned app.
+  the published page signs visitors in with Sign in with Craftian, exactly as an owned app
+  does: `sdk.auth.signIn()` or `sdk.auth.signInWithGoogle()` from a click handler, see
+  *Auth is not optional* below. The visitor gets a Craftian account and their records are
+  owner-scoped by the defaults in *The database is the safe option* below. A scratch app
+  therefore does **not** need anonymous access unless you choose to let visitors in without
+  signing in, and it is not a reason to fall back to `localStorage` for safety.
+  What a scratch publish does not build is the React frontend under `src/frontend/`: the
+  served page is the static one you commit under `website/`, which can talk to the database,
+  to auth and to your own backend routes. That, not security, is the reason to move to an
+  owned app.
 - **500 KB per file** in scratch mode, and 10 MB / 2000 files across the whole tree.
 - **24-hour fixed lifetime, from creation.** Cloning, fetching and pushing do NOT extend
   it, so it is a real deadline: tell the user plainly that scratch mode is scratch, and
@@ -138,12 +190,12 @@ runtime features below attach to.
 
 1. The user signs in once and creates the app (or you create it through the MCP tools
    below, once you are authorized). Its id is in the editor URL,
-   `https://craftian.ai/go#/apps/<appId>`.
+   `https://craftian.ai/ide?app=<appId>`.
 2. Mint a **per-app git token** for it. Minting needs the user's signed-in session, not a
    token, so either they copy one out of the Craftian UI or they run:
 
    ```bash
-   curl -b "SESSION_ID=<the user's session cookie>" \
+   curl -b "__Host-SESSION_ID=<the user's session cookie>" \
      -X POST "https://craftian.ai/api/app-git/tokens?app_id=<appId>" \
      -H 'Content-Type: application/json' -d '{"label":"laptop"}'
    # → {"id":"...","token":"<plaintext, returned once>"}
@@ -218,9 +270,11 @@ SDK results, so the UI reads exactly that; the human text goes in `label` (and `
 on an entity). A `craftian.ts` the platform regenerated may show existing names lower-case
 with spaces (`"last touch"`): that is the stored form of `lastTouch`, it keeps working, so
 leave it. `uid` is optional on both, so leave it out and let the platform assign one. An
-entity also takes an optional `features` object (`view`, `create`, `edit`, `delete`, each
-`{ "enabled": true, "allowRoles": [...] }`) — omit it and you get the owner-only defaults
-described in *The database is the safe option*, which is usually what you want.
+entity also takes four optional access keys, `canReadIfRoles`, `canCreateIfRoles`,
+`canEditIfRoles` and `canDeleteIfRoles`, each a list of role names (the roles and the
+per-key defaults are in step 4 of *Auth is not optional*). Omit them and you get the
+owner-only defaults described in *The database is the safe option*, which is usually what
+you want.
 
 Four keys people guess wrong, all four silent or fatal:
 
@@ -294,7 +348,7 @@ or for view state like a collapsed sidebar. Do not choose it as a security measu
 database that authenticates the caller and checks every row.
 
 None of this is owned-app-only. A **scratch** app runs the same engine and the same login,
-so the same defaults protect it; what it lacks is the build step for `src/`, not security.
+so the same defaults protect it; what it lacks is the React build for `src/frontend/`, not security.
 The single configuration that genuinely opens data to everyone is `allowAnonymousCRUD`, and
 you only need it if you deliberately ship an app with no login screen.
 
@@ -314,8 +368,8 @@ platform accounts:
 
 - Someone who already has a Craftian account signs in to the app with it. No second signup,
   no invitation step, no separate password.
-- Someone who registers from the app's own page is creating a genuine Craftian account. It
-  verifies by email like any other, and it then works on every app deployed on Craftian that
+- Someone who creates an account from the sign-in page the app opens is creating a genuine
+  Craftian account. It verifies by email like any other, and it then works on every app deployed on Craftian that
   they are allowed into: the ones that are publicly available, plus any they have been
   granted access to.
 - Access to a given app stays a separate decision from having an account. A Craftian account
@@ -328,51 +382,53 @@ verification flow, and you should not invent one on top: no user table of your o
 passwords, no "app password" field, no home-grown token. Identity comes from the platform,
 and your job is deciding what each identity is allowed to do.
 
-1. **Use the platform's auth.** `sdk.auth` gives you `register`, `login`, `logout`,
-   `getUserInfo`, `forgotPassword`, `resetPassword`, `changePassword` and `updateProfile`,
-   plus the Google button below. `craftian/sdk.d.ts` in the clone is the exact surface. The
-   session is an ordinary same-origin `HttpOnly` cookie, so a reload keeps it and you write
-   no token handling at all. Note that `register` sends a verification email and returns no
-   session: the account becomes usable when the user clicks the link.
-2. **Put a "Sign in with Google" button on the login form.** Make it part of building one
-   rather than a later polish: it is the same one-click login the Craftian
-   site itself uses, it skips the password field and the verification email entirely, and
-   it costs a button and one line —
-   `sdk.auth.loginWithGoogle()`, optionally `sdk.auth.loginWithGoogle({ returnTo: '/…' })`.
-   Best usability-per-line in the whole sign-in screen, and the reason a user who bounces
+1. **Use the platform's auth: Sign in with Craftian.** `sdk.auth` gives you `signIn`,
+   `signInWithGoogle`, `signOut`, `isSignedIn`, `getUserInfo`, `handleRedirectResult` and
+   `updateProfile`. `craftian/sdk.d.ts` in the clone is the exact surface. `signIn()` opens
+   craftian.ai's sign-in page in a popup (a full-page redirect when the popup is blocked,
+   which the SDK finishes by itself on the way back); the visitor signs in or creates an
+   account there, and the app never sees or asks for a password, so do not build an email and
+   password form. Call it straight from a click handler with no `await` before it, or the
+   browser blocks the popup. The SDK keeps the sign-in's token on the app's origin, refreshes
+   it by itself and sends it on every call it makes, so a reload keeps the visitor signed in
+   and you write no token handling at all. It rejects with a `SignInError`; `popup_closed`
+   and `access_denied` mean the visitor gave up and deserve no error message. Never build the
+   sign-in URLs yourself. The older `login`, `register` and `logout` methods are deprecated:
+   they set a cookie on the app's host, which is being switched off.
+2. **Offer Google next to it.** `sdk.auth.signInWithGoogle()` from its own click handler is
+   the same sign-in going straight to Google: one click, no password and no verification
+   email to wait for. It costs a button and one line, and it is the reason a user who bounces
    off "create a password" still ends up inside the app.
-   GitHub is brokered too, as `sdk.auth.loginWithProvider('github')`. Four things to get
-   right.
-   It is a **full-page redirect** through Google and Craftian's central auth host, so it
-   cannot be `fetch`ed, awaited or run inside an iframe, and no code after the call runs:
-   treat it as the end of that page. `returnTo` defaults to the current URL and is
-   remembered across the trip, so the user lands back where they were.
-   `sdk.auth.getOAuthLoginUrl('google')` hands you the same URL if you would rather put it
-   in an `<a href>`, and it is `/api/auth/oauth?provider=google` if you are on a page with
-   no SDK. And the session comes back on the app's own `*.craftian.app` host; if the app is
-   on a **custom domain**, the flow finishes on `craftian.ai` instead, so keep the sign-in
-   page on the app's Craftian URL until that changes.
 3. **Give the page a signed-out state.** Check the current user on load and render a
-   register/login screen instead of the data. A UI that assumes a user and fails at the first
+   sign-in screen instead of the data. A UI that assumes a user and fails at the first
    fetch is the usual way this gets misdiagnosed as a database problem.
 4. **Leave the per-record defaults alone, and widen only on purpose.** Data is already
    scoped to the caller: the owner-only defaults in the previous section do the work, and
    every record carries an implicit `createdBy` besides. You write access rules when you
-   want something *other* than "each user sees their own": on the entity, `features` sets
-   `view` / `create` / `edit` / `delete`, each `{ "enabled": true, "allowRoles": [...] }`,
-   where a role is `TARGET_OWNER`, `TARGET_COLLABORATOR`, `ANYONE` (any signed-in user),
-   `ADMINISTRATOR` or one of your `customRoles`. Team-wide reading is `"allowRoles":
-   ["ANYONE"]` on `view`, and it is a decision, not a default. **For a team-shaped app**
+   want something *other* than "each user sees their own": on the entity in `craftian.ts`,
+   four flat keys each take a list of role names, `canReadIfRoles`, `canCreateIfRoles`,
+   `canEditIfRoles` and `canDeleteIfRoles`. A role is `TARGET_OWNER` (whoever created the
+   record), `TARGET_COLLABORATOR`, `ANYONE` (any signed-in user), `ADMINISTRATOR` or one of
+   your `customRoles`. An omitted key (or `null`) keeps its default: `["ANYONE"]` for
+   `canCreateIfRoles`, `["TARGET_OWNER"]` for the other three. An empty list means nobody,
+   and a role name that is neither built in nor in `customRoles` is dropped without an
+   error. A `features` object on an entity in a pushed `craftian.ts` is accepted and then
+   ignored, so the entity keeps the owner-only defaults: write the flat keys. Team-wide
+   reading is `"canReadIfRoles": ["ANYONE"]`, and it is a decision, not a default.
+   **For a team-shaped app**
    (a CRM, a shared task board, inventory, ticketing, anything colleagues work on together)
    the owner-only default means each person sees only the records they created, so a
    colleague who signs in sees an empty app. Ask the user whether records should be
-   team-visible (`ANYONE` on `view`, and decide `edit` / `delete` the same way); if you
+   team-visible (`ANYONE` in `canReadIfRoles`, and decide `canEditIfRoles` /
+   `canDeleteIfRoles` the same way); if you
    cannot ask, make the choice and state it plainly in the final report. Never describe
    owner-only as "protected" or "secure" without saying what it means for a team.
    For anything conditional, use entity hooks in `src/backend/setup.ts`
    (`ctx.auth.isOwner(...)`, `ctx.auth.hasRole(...)`, `ctx.auth.isAdmin()`) and read
-   `ctx.user` in custom routes, which is `null` when anonymous. Filtering a list in the
-   browser is never enforcement, it is presentation.
+   `ctx.user` in custom routes, which is `null` when anonymous. The page calls a custom route
+   that needs the user with `sdk.fetch('/api/v1/<route>', …)`, which carries the sign-in; a
+   plain `fetch` arrives anonymous. Filtering a list in the browser is never enforcement, it
+   is presentation.
 5. **Model roles as your own data when the product needs them.** `customRoles` covers
    coarse gating, but assigning app roles is a builder-level operation, so a per-user
    permission system inside the product belongs in your own collections. See
@@ -400,7 +456,7 @@ user's afternoon.
 creation token, and it takes ownership **in place**:
 
 ```bash
-curl -X POST -u "x:TOK..." -b "SESSION_ID=<session>" \
+curl -X POST -u "x:TOK..." -b "__Host-SESSION_ID=<session>" \
      https://craftian.ai/git/todo-app-a3f9c1/claim
 # → {"appId":"todo-app-a3f9c1","owned":true,"gitRemote":"...","liveUrl":"...", ...}
 ```
@@ -475,11 +531,11 @@ server is already connected.
 What claiming gains: the project stops expiring, gains a real owner inside an org, loses
 the scratch size caps (about 1.9 MB per file instead of 500 KB, and no aggregate tree cap),
 and can take a custom domain. What it does NOT change is the build story: publishing serves
-the static files you commit and deploys the model, so a scratch project already has the
-database, sign-in and the permission rules; what a scratch publish never compiles is `src/`
-— the custom routes, entity hooks, scheduled tasks and React frontend of the runtime listed
-below. Deploy the claimed app the ordinary way (from the editor, `/api/deploy`, or the MCP
-`deploy_app` tool) to get that.
+the static files you commit, deploys the model and builds the backend under `src/backend/`,
+so a scratch project already has the database, sign-in, the permission rules and its custom
+routes, entity hooks and scheduled tasks. What a scratch publish never compiles is the React
+frontend under `src/frontend/`. Deploy the claimed app the ordinary way (from the editor,
+`/api/deploy`, or the MCP `deploy_app` tool) to get that.
 
 ---
 
@@ -497,6 +553,16 @@ Do not build these yourself. They are the reason to deploy here.
 - **Custom HTTP routes** with schema validation, and **entity hooks**, running in a
   sandbox. `zod`, `date-fns` and `lodash` are available inside it.
 - **Scheduled jobs**, interval or cron, on durable alarms. Minimum interval is 5 minutes.
+  They run whether or not anyone opens the app. A job first runs at its next occurrence
+  after the deploy that introduced it: deploying does not run it, and a redeploy does not
+  restart a job whose schedule is unchanged. Missed occurrences are caught up with one run.
+  Runs are at-least-once (an interrupted run happens again), so write job handlers that are
+  safe to repeat. A job can email the app's own users, under the same rules and price as a
+  route, and a repeated run sends its email again. The deploy and publish responses list the jobs in `scheduledTasks`, each
+  with its next run (`tasksPending: true` means the list is still being indexed).
+  `list_scheduled_tasks` lists the jobs the deployed code registered, with each one's last run, its
+  outcome and its next due time, and `run_scheduled_task` runs one right now for testing
+  without changing its schedule.
 - **File and asset storage**, with folders.
 - **Email and AI** as platform calls, metered per use.
 - **A custom domain**, verified over DNS with the certificate issued automatically.
@@ -513,10 +579,11 @@ write files, deploy and inspect without shelling out:
 
 - `https://craftian.ai/mcp/v2/sse` covers the full builder surface: `create_app`
   (a project from one HTML page, no model yet), `update_app` (adds or changes the model), `list_apps`, file operations (`write_files`, `read_files`, `patch_files`,
-  `search_files`, `delete_file`, `list_files`), `deploy_app`, `clone_app`, `debug_app`,
-  `diff_files`, `send_req` and `get_docs`, plus `session_info`, `compile_app`,
+  `search_files`, `delete_file`, `list_files`), `deploy_app`, `clone_app`, `get_app_status`,
+  `get_data_model`, `list_routes`, `list_scheduled_tasks`, `run_scheduled_task`, `diff_files`, `git_log`, `list_records`, `get_record`, `create_record`, `update_record`, `delete_record`, `call_route` and `get_docs`, plus `session_info`, `compile_app`,
   `get_screenshot`, `export_app` and `import_app`.
-- `https://craftian.ai/mcp/sse` is the v1 surface: the same tools without those last five.
+- `https://craftian.ai/mcp/sse` is the v1 surface: the same tools without those last five and
+  without `list_routes`, `list_scheduled_tasks`, `run_scheduled_task` and `call_route`.
 
 Both authorize over OAuth 2.1 with PKCE, which means a browser step the user performs once.
 If you cannot complete that step, stay in scratch mode over git, which needs no
@@ -566,14 +633,14 @@ authorization at all.
 6. **Never paste a git token, or a scratch project's creation token, into a commit, an
    issue or a chat log.** Both are bearer credentials. The project ID is fine to share; the
    token is not, and the clone URL contains it.
-7. **Ship sign-in with the app, not after it.** Anything holding real data gets registration,
-   login and server-side ownership checks as part of the first version. Anonymous read/write
+7. **Ship sign-in with the app, not after it.** Anything holding real data gets sign-in and
+   server-side ownership checks as part of the first version. Anonymous read/write
    on a collection is a deliberate choice for public content, made once and told to the user,
    never the default you reach for to make a fetch succeed.
-8. **Default to a "Sign in with Google" button on the login form.** One
-   `sdk.auth.loginWithGoogle()` call, no password to invent and no verification email to
-   wait for. Leave it out when there is a reason to, but if you wrote email and password
-   fields and simply did not think about it, that is the cheapest usability win in the app
+8. **Default to a "Sign in with Google" button next to Sign in with Craftian.** One
+   `sdk.auth.signInWithGoogle()` call, no password to invent and no verification email to
+   wait for. Leave it out when there is a reason to, but if you offered only Sign in with
+   Craftian and simply did not think about it, that is the cheapest usability win in the app
    going unclaimed.
 
 <!-- Craftian skill. Copyright (c) 2026 FOR IO LABS, INC. MIT licensed.
